@@ -3,4 +3,4 @@ pandas
 numpy
 yfinance
 backtrader
-matplotlib
+matplotlib==3.5.3
