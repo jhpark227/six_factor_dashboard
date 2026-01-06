@@ -392,7 +392,7 @@ if selected_ticker:
         ax4.grid(True, alpha=0.2)
         ax4.legend(loc='lower left', fontsize=8)
 
-        plt.tight_layout()
+        # plt.tight_layout()
         st.pyplot(fig)
 
         # --- 성과 지표 요약 (m1~m4) ---
