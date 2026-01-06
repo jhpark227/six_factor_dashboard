@@ -1,6 +1,6 @@
 streamlit
 pandas
-numpy
+numpy<2.0.0
 yfinance
 backtrader
 matplotlib==3.5.3
