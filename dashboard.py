@@ -277,9 +277,11 @@ if selected_ticker:
         df_s = yf.download(selected_ticker, start=start_date, auto_adjust=True, progress=False)
         df_b = yf.download(selected_mkt, start=start_date, auto_adjust=True, progress=False)
         
-        for df in [df_s, df_b]:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
+        # 2. [중요] 멀티인덱스 컬럼 해결 (튜플 오류 방지)
+        if isinstance(df_s.columns, pd.MultiIndex):
+            df_s.columns = df_s.columns.droplevel(1)
+        if isinstance(df_b.columns, pd.MultiIndex):
+            df_b.columns = df_b.columns.droplevel(1)
 
         # 2. Backtrader 실행부
         cerebro = bt.Cerebro()
