@@ -8,6 +8,9 @@ import time
 import warnings
 from datetime import datetime
 
+if not hasattr(np, 'Inf'):
+    np.Inf = np.inf
+
 # 기초 설정
 warnings.filterwarnings(action='ignore')
 st.set_page_config(page_title="Six-Factor Strategy Dashboard", layout="wide")
