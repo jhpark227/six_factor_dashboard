@@ -105,17 +105,18 @@ class SixFactorStrategy(bt.Strategy):
     def notify_order(self, order):
         if order.status in [order.Completed]:
             curr_date = self.data.datetime.date(0)
+            reason = order.info.get('reason', 'N/A')
             if order.isbuy():
                 if self.first_buy_date is None: self.first_buy_date = curr_date
                 self.last_buy_date = curr_date
                 self.bar_executed = len(self)
                 self.highest_price = max(self.highest_price, order.executed.price)
-                self.order_history.append((curr_date, order.executed.price, 'BUY'))
+                self.order_history.append((curr_date, order.executed.price, 'BUY', reason))
             elif order.issell():
                 self.highest_price = 0
                 self.step_1_done = False
                 self.first_buy_date = self.last_buy_date = None
-                self.order_history.append((curr_date, order.executed.price, 'SELL'))
+                self.order_history.append((curr_date, order.executed.price, 'SELL',reason))
 
     def notify_trade(self, trade):
         if not trade.isclosed: return
@@ -127,7 +128,7 @@ class SixFactorStrategy(bt.Strategy):
         is_high_vol = self.daily_stock.volume[-1] > self.avg_vol[-1] * 1.3
         is_cooldown = (current_date - self.last_sell_date).days >= 7 if self.last_sell_date else True
         if all([score >= threshold, self.wma[-1] > self.wma[-5], self.adx[-1] > 25, is_high_vol, is_cooldown]):
-            self.buy_action("New Entry", 0.8)
+            self.buy_action("신규 진입(80%)", 0.8)
 
     def check_pyramiding_and_sell(self, score, current_date, dynamic_stop_loss):
         avg_price = self.position.price
@@ -139,35 +140,42 @@ class SixFactorStrategy(bt.Strategy):
         atr_stop_pct = ((avg_price - (self.atr[-1] * 2)) - avg_price) / avg_price
         final_stop_threshold = min(dynamic_stop_loss, atr_stop_pct)
 
-        if not self.step_1_done and current_return >= 0.10 and self.rsi_w[-1] > 60 and score >= 8:
-            self.buy_action("Pyramiding", 0.15); self.step_1_done = True
-        if current_return <= final_stop_threshold: self.sell_action(f"StopLoss({final_stop_threshold:.1%})"); return
+        # --- 매수(불타기) --- #
+        if not self.step_1_done and current_return >= 0.15 and self.rsi_w[-1] > 60 and score >= 8:
+            self.buy_action("불타기(+15%)", 0.15); self.step_1_done = True
+        # --- 매도 --- #
+        # [1] 수익률/변동성(ATR) 손절(Stop Loss)
+        if current_return <= final_stop_threshold: self.sell_action(f"Stop Loss({final_stop_threshold:.1%})"); return
         if (hold_days <= 5 and score < 4) or (hold_days >= 120 and current_return <= 0.05):
-            self.sell_action("Whipsaw/TimeExit"); return
+            self.sell_action("휩소(Whipsaw)/시간 손절"); return
         if current_return >= 0.15:
             if current_return >= 0.50: exit_limit = -0.25 if score >= 6 else -0.15
             elif current_return >= 0.30: exit_limit = -0.15 if score >= 7 else -0.12
             else: exit_limit = -0.12 if score >= 8 else -0.10
-            if pullback <= exit_limit: self.sell_action("Trailing Profit"); return
+            if pullback <= exit_limit: self.sell_action("수익 보존 익절"); return
 
     def buy_action(self, reason, stake):
         size = int((self.broker.get_value() * stake) / self.daily_stock.close[0])
-        if size > 0: self.buy(size=size)
+        if size > 0: 
+            order = self.buy(size=size)
+            order.addinfo(reason=reason)
 
     def sell_action(self, reason):
-        self.sell(size=self.position.size)
+        order = self.sell(size=self.position.size)
+        order.addinfo(reason=reason)
         self.last_sell_date = self.data.datetime.date(0)
         self.last_sell_reason = reason
+        
 
 # --- UI 레이아웃 ---
 st.title("📈 Six-Factor 퀀트 전략 대시보드")
 tab1, tab2 = st.tabs(["🚀 전체 시장 요약", "🔍 종목별 정밀 분석"])
 
 # 공통 사이드바
-st.sidebar.header("전역 설정")
+st.sidebar.header("Configuration")
 num_stocks = st.sidebar.slider("분석 종목 수 (시총 순)", 5, 100, 20)
-start_date = st.sidebar.date_input("분석 시작일", datetime(2020, 1, 1))
-cash = st.sidebar.number_input("초기 자산", value=1000000)
+start_date = st.sidebar.date_input("분석 시작일", datetime(2021, 1, 1))
+cash = st.sidebar.number_input("초기 자산", value=10000)
 
 corp_df = load_corp_data()
 
@@ -182,6 +190,12 @@ with tab1:
         for i, (target, target_market) in enumerate(target_list.values, start=1):
             df_stock = yf.download(target, start=start_date, auto_adjust=True, progress=False)
             df_bench = yf.download(target_market, start=start_date, auto_adjust=True, progress=False)
+            
+            # 2. [중요] 멀티인덱스 컬럼 해결 (튜플 오류 방지)
+            if isinstance(df_stock.columns, pd.MultiIndex):
+                df_stock.columns = df_stock.columns.droplevel(1)
+            if isinstance(df_bench.columns, pd.MultiIndex):
+                df_bench.columns = df_bench.columns.droplevel(1)
             
             if len(df_stock) < 50: continue
             
@@ -447,7 +461,7 @@ if selected_ticker:
         temp_entry_price = 0
 
         for t in trades:
-            date, price, side = pd.Timestamp(t[0]), t[1], t[2]
+            date, price, side, reason = pd.Timestamp(t[0]), t[1], t[2], t[3]
             
             if side == 'BUY':
                 if not in_pos: # [1] 신규 매수 발생
@@ -458,6 +472,7 @@ if selected_ticker:
                         '날짜': date.strftime('%Y-%m-%d'),
                         '구분': '🔵 신규매수',
                         '가격': f"${price:,.0f}",
+                        '사유': reason,
                         '수익률': "-",
                         '보유기간': "-"
                     })
@@ -466,6 +481,7 @@ if selected_ticker:
                         '날짜': date.strftime('%Y-%m-%d'),
                         '구분': '➕ 추가매수',
                         '가격': f"${price:,.0f}",
+                        '사유': reason,
                         '수익률': "-",
                         '보유기간': "-"
                     })
@@ -478,6 +494,7 @@ if selected_ticker:
                     '날짜': date.strftime('%Y-%m-%d'),
                     '구분': '🔴 전량매도',
                     '가격': f"${price:,.0f}",
+                    '사유': reason,
                     '수익률': f"{profit_pct:+.2%}",
                     '보유기간': f"{holding_days}일"
                 })
@@ -494,6 +511,7 @@ if selected_ticker:
                 '날짜': last_date.strftime('%Y-%m-%d'),
                 '구분': '🟡 보유중(평가)',
                 '가격': f"${last_price:,.0f}",
+                '사유': "-",
                 '수익률': f"{profit_pct:+.2%}",
                 '보유기간': f"{holding_days}일"
             })
@@ -515,7 +533,9 @@ if selected_ticker:
 
             styled_log = log_df.style.applymap(color_status, subset=['구분'])\
                                     .applymap(color_returns, subset=['수익률'])
-
+                                    
+            # 컬럼 순서 조정
+            log_df = log_df[['날짜', '구분', '가격', '사유', '수익률', '보유기간']]
             st.dataframe(styled_log, use_container_width=True, hide_index=True)
         else:
             st.info("해당 기간 내 발생한 매매 내역이 없습니다.")
